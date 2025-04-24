@@ -285,5 +285,5 @@ async def test_spotify(song_name: str, artist_name: str):
 
 if __name__ == "__main__":
     import uvicorn
-    #port = int(os.environ.get("PORT", 8080))  # Railway uses 8080
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))  # Railway uses 8080
+    uvicorn.run(app, host="0.0.0.0", port=port)
