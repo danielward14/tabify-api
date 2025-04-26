@@ -12,8 +12,20 @@ from spotipy.oauth2 import SpotifyClientCredentials
 import requests
 from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+# Add CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
