@@ -1,5 +1,5 @@
 import shutil
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 import yt_dlp
 import tempfile
 import os
@@ -13,8 +13,19 @@ import requests
 from bs4 import BeautifulSoup
 from googleapiclient.discovery import build
 from fastapi.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+from pydantic import BaseModel
+from dotenv import load_dotenv
+from bson import ObjectId
+import httpx
+from fastapi import APIRouter
 
+router = APIRouter()
 app = FastAPI()
+
+app.include_router(router)
+
+
 # Add CORS Middleware
 app.add_middleware(
     CORSMiddleware,
@@ -25,11 +36,91 @@ app.add_middleware(
 )
 
 
+GITHUB_REPO_TREE_URL = "https://api.github.com/repos/OpenTabOrg/opentab/git/trees/main?recursive=1"
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/OpenTabOrg/opentab/main"
 
 
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+MONGO_URI = os.getenv("MONGO_URI")
+
+
+mongo_client = AsyncIOMotorClient(MONGO_URI)
+db = mongo_client['TabifyDB'] # Database name
+tabs_collection = db['tabs'] # Collection where we will save tabs
+
+
+
+@router.post("/refresh-tabs")
+async def refresh_tabs():
+    try:
+        async with httpx.AsyncClient() as client:
+            # Step 1: Get all .txt file paths from GitHub repo
+            tree_resp = await client.get(GITHUB_REPO_TREE_URL)
+            tree_data = tree_resp.json()
+
+            tab_files = [item['path'] for item in tree_data.get('tree', []) if item['path'].endswith('.txt')]
+            print(f"Found {len(tab_files)} tab files.")
+
+            imported_count = 0
+
+            # Step 2: For each tab file, fetch the content and store it
+            for file_path in tab_files:
+                full_url = f"{GITHUB_RAW_URL}/{file_path}"
+                file_resp = await client.get(full_url)
+                tab_text = file_resp.text
+
+                # Parse artist and song name from path
+                parts = file_path.split('/')
+                if len(parts) != 2:
+                    continue  # skip weird files
+
+                artist_name = parts[0].replace('-', ' ').title()
+                song_name = parts[1].replace('.txt', '').replace('-', ' ').title()
+
+                # Insert into MongoDB
+                new_tab = {
+                    "artist": artist_name,
+                    "title": song_name,
+                    "tab_text": tab_text
+                }
+                await tabs_collection.insert_one(new_tab)  # Make sure you have your Mongo collection ready
+
+                imported_count += 1
+
+        return {"message": f"Successfully imported {imported_count} tabs!"}
+    except Exception as e:
+        print("Error refreshing tabs:", str(e))
+        return {"error": str(e)}
+
+
+# Fetch and Save tabs to MongoDB
+class TabItem(BaseModel):
+    title: str
+    artist: str
+    tab_text: str
+
+@app.post("/save-tab")
+async def save_tab(tab: TabItem):
+    new_tab = tab.model_dump()  # safe and correct in Pydantic 2
+    result = await tabs_collection.insert_one(new_tab)
+    return {"message": "Tab saved", "id": str(result.inserted_id)}
+
+@app.get("/get-tabs")
+async def get_tabs(artist: str = Query(None), song: str = Query(None)):
+    query = {}
+    if artist:
+        query["artist"] = {"$regex": artist, "$options": "i"}  # case-insensitive
+    if song:
+        query["title"] = {"$regex": song, "$options": "i"}
+
+    tabs = await tabs_collection.find(query).to_list(50)  # limit 50 results
+    for tab in tabs:
+        tab["_id"] = str(tab["_id"])  # convert ObjectId to string for JSON
+    return tabs
+
+
 
 
 # Custom cache handler with full implementation
