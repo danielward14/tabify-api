@@ -121,7 +121,30 @@ async def get_tabs(artist: str = Query(None), song: str = Query(None)):
     return tabs
 
 
+@router.get("/tabs")
+async def get_tab(artist: str = Query(...), title: str = Query(...)):
+    try:
+        # Normalize inputs
+        artist_clean = artist.strip().lower()
+        title_clean = title.strip().lower()
 
+        # Search in MongoDB
+        tab = await tabs_collection.find_one({
+            "artist": {"$regex": f"^{artist_clean}$", "$options": "i"},
+            "title": {"$regex": f"^{title_clean}$", "$options": "i"}
+        })
+
+        if not tab:
+            return {"error": "Tab not found"}
+
+        return {
+            "artist": tab["artist"],
+            "title": tab["title"],
+            "tab_text": tab["tab_text"]
+        }
+    except Exception as e:
+        print("Error fetching tab:", str(e))
+        return {"error": str(e)}
 
 # Custom cache handler with full implementation
 class SafeCacheHandler(spotipy.cache_handler.CacheHandler):
@@ -293,18 +316,26 @@ async def find_song(yt_url: str):
             raise HTTPException(status_code=404, detail="Could not identify the song.")
         song_name = song_info['track']['title']
         artist_name = song_info['track']['subtitle']
-        spotify_result, tab_url, youtube_lessons_url = await asyncio.gather(
-            asyncio.to_thread(search_spotify, song_name, artist_name),
-            asyncio.to_thread(search_tabs, song_name, artist_name),
-            asyncio.to_thread(get_youtube_guitar_lessons_link, song_name, artist_name)
+
+        spotify_result, youtube_lessons_url, tab_doc = await asyncio.gather(
+        asyncio.to_thread(search_spotify, song_name, artist_name),
+        asyncio.to_thread(get_youtube_guitar_lessons_link, song_name, artist_name),
+        tabs_collection.find_one({
+            "artist": {"$regex": f"^{artist_name}$", "$options": "i"},
+            "title": {"$regex": f"^{song_name}$", "$options": "i"}
+            })
         )
+
+        tab_text = tab_doc["tab_text"] if tab_doc else None
+
+
         execution_time = time.time() - start_time
         print(f"Execution time: {execution_time:.2f} seconds")
         return {
             "song": song_name,
             "artist": artist_name,
             "spotify": spotify_result,
-            "tabs": tab_url,
+            "tabs": tab_text,
             "youtube_lessons": youtube_lessons_url,
             "execution_time": f"{execution_time:.2f} seconds"
         }
@@ -346,11 +377,17 @@ async def identify_audio(file: UploadFile = File(...)):
         artist_name = song_info['track']['subtitle']
 
         # Gather additional data
-        spotify_result, tab_url, youtube_lessons_url = await asyncio.gather(
-            asyncio.to_thread(search_spotify, song_name, artist_name),
-            asyncio.to_thread(search_tabs, song_name, artist_name),
-            asyncio.to_thread(get_youtube_guitar_lessons_link, song_name, artist_name)
+        spotify_result, youtube_lessons_url, tab_doc = await asyncio.gather(
+        asyncio.to_thread(search_spotify, song_name, artist_name),
+        asyncio.to_thread(get_youtube_guitar_lessons_link, song_name, artist_name),
+        tabs_collection.find_one({
+            "artist": {"$regex": f"^{artist_name}$", "$options": "i"},
+            "title": {"$regex": f"^{song_name}$", "$options": "i"}
+        })
         )
+
+        tab_text = tab_doc["tab_text"] if tab_doc else None
+
 
         execution_time = time.time() - start_time
         print(f"Audio identification time: {execution_time:.2f} seconds")
@@ -358,7 +395,7 @@ async def identify_audio(file: UploadFile = File(...)):
             "song": song_name,
             "artist": artist_name,
             "spotify": spotify_result,
-            "tabs": tab_url,
+            "tabs": tab_text,
             "youtube_lessons": youtube_lessons_url,
             "execution_time": f"{execution_time:.2f} seconds"
         }
@@ -385,6 +422,34 @@ async def youtube_lessons_videos(song_name: str, artist_name: str):
 async def test_spotify(song_name: str, artist_name: str):
     result = search_spotify(song_name, artist_name)
     return {"spotify_result": result}
+
+@app.get("/search-song")
+async def search_song(song_name: str, artist_name: str):
+    try:
+        spotify_result, youtube_lessons_url = await asyncio.gather(
+            asyncio.to_thread(search_spotify, song_name, artist_name),
+            asyncio.to_thread(get_youtube_guitar_lessons_link, song_name, artist_name)
+        )
+
+        # Try fetching tabs from MongoDB
+        tab_doc = await tabs_collection.find_one({
+            "artist": {"$regex": f"^{artist_name}$", "$options": "i"},
+            "title": {"$regex": f"^{song_name}$", "$options": "i"}
+        })
+
+        tab_text = tab_doc["tab_text"] if tab_doc else None
+
+        return {
+            "song": song_name,
+            "artist": artist_name,
+            "spotify": spotify_result,
+            "tabs": tab_text,
+            "youtube_lessons": youtube_lessons_url,
+        }
+    except Exception as e:
+        print(f"Error in search_song: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
 
 if __name__ == "__main__":
     import uvicorn
