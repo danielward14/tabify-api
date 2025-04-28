@@ -1,5 +1,4 @@
 import shutil
-import threading
 from fastapi import FastAPI, HTTPException, UploadFile, File, Query
 import yt_dlp
 import tempfile
@@ -51,27 +50,6 @@ mongo_client = AsyncIOMotorClient(MONGO_URI)
 db = mongo_client['TabifyDB'] # Database name
 tabs_collection = db['tabs'] # Collection where we will save tabs
 
-def send_refresh_request():
-    url = "https://web-production-7ba9.up.railway.app/refresh-tabs"
-    try:
-        response = requests.post(url)
-        print(f"Request sent! Status: {response.status_code}")
-    except Exception as e:
-        print(f"Error sending request: {e}")
-
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    threading.Thread(target=send_refresh_request).start()
-    yield  # Lifespan context
-    # Add any cleanup code here if needed
-
-app = FastAPI(lifespan=lifespan)
-
-@app.get("/")
-async def read_root():
-    return {"message": "FastAPI server running"}
 
 
 @router.post("/refresh-tabs")
